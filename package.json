@@ -1,0 +1,26 @@
+{
+  "name": "a-share-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A-share market data API running on Cloudflare Workers",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --minify",
+    "types": "wrangler types",
+    "types:check": "wrangler types --check",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run types && npm run typecheck && npm test && wrangler deploy --dry-run"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20260814.1",
+    "@types/node": "24.10.1",
+    "typescript": "6.0.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.123.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
