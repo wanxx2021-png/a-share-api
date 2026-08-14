@@ -40,6 +40,27 @@ const STOCK_LIST_FIELDS = [
   "f124",
 ].join(",");
 
+export interface MarketStock {
+  readonly symbol: string | null;
+  readonly code: string | null;
+  readonly exchange: "SH" | "SZ" | "BJ";
+  readonly name: string | null;
+  readonly price: number | null;
+  readonly changePct: number | null;
+  readonly change: number | null;
+  readonly volumeLots: number | null;
+  readonly amount: number | null;
+  readonly amplitudePct: number | null;
+  readonly turnoverRatePct: number | null;
+  readonly peDynamic: number | null;
+  readonly volumeRatio: number | null;
+  readonly high: number | null;
+  readonly low: number | null;
+  readonly open: number | null;
+  readonly previousClose: number | null;
+  readonly sourceUpdatedAt: string | null;
+}
+
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -151,7 +172,7 @@ function rowsFromData(data: JsonRecord): JsonRecord[] {
   return data.diff.filter(isRecord);
 }
 
-function parseStockRow(row: JsonRecord) {
+function parseStockRow(row: JsonRecord): MarketStock {
   const code = asString(row.f12) ?? "";
   const market = asNumber(row.f13);
   const exchange = exchangeFromMarket(code, market);
@@ -320,9 +341,19 @@ export async function getRankings(
   limit: number,
   options: UpstreamOptions,
 ) {
+  return getStockPage(1, limit, sort, order, options);
+}
+
+export async function getStockPage(
+  page: number,
+  pageSize: number,
+  sort: RankingSort,
+  order: SortOrder,
+  options: UpstreamOptions,
+) {
   const url = buildUrl(QUOTE_API, "clist/get", {
-    pn: "1",
-    pz: String(limit),
+    pn: String(page),
+    pz: String(pageSize),
     po: order === "desc" ? "1" : "0",
     np: "1",
     invt: "2",
@@ -336,7 +367,12 @@ export async function getRankings(
   return {
     sort,
     order,
+    page,
+    pageSize,
     total: asNumber(data.total),
+    totalPages: asNumber(data.total) === null
+      ? null
+      : Math.ceil((asNumber(data.total) ?? 0) / pageSize),
     items: rowsFromData(data).map(parseStockRow),
   };
 }
@@ -444,6 +480,29 @@ export async function getBreadth(options: UpstreamOptions) {
 export type KlinePeriod = "5m" | "15m" | "30m" | "60m" | "day" | "week" | "month";
 export type PriceAdjustment = "none" | "forward" | "backward";
 
+export interface KlineItem {
+  readonly time: string | null;
+  readonly open: number | null;
+  readonly close: number | null;
+  readonly high: number | null;
+  readonly low: number | null;
+  readonly volumeLots: number | null;
+  readonly amount: number | null;
+  readonly amplitudePct: number | null;
+  readonly changePct: number | null;
+  readonly change: number | null;
+  readonly turnoverRatePct: number | null;
+}
+
+export interface KlineResult {
+  readonly symbol: string;
+  readonly code: string;
+  readonly name: string | null;
+  readonly period: KlinePeriod;
+  readonly adjustment: PriceAdjustment;
+  readonly items: readonly KlineItem[];
+}
+
 const KLINE_PERIODS: Readonly<Record<KlinePeriod, string>> = {
   "5m": "5",
   "15m": "15",
@@ -466,7 +525,7 @@ export async function getKline(
   adjustment: PriceAdjustment,
   limit: number,
   options: UpstreamOptions,
-) {
+): Promise<KlineResult> {
   const security = normalizeSymbol(symbol);
   const url = buildUrl(HISTORY_API, "stock/kline/get", {
     secid: security.secid,
