@@ -1,0 +1,337 @@
+openapi: 3.1.0
+info:
+  title: A 股行情与技术形态 API
+  version: 1.1.0
+  description: >-
+    Cloudflare Workers 上的 A 股行情与技术形态接口。技术形态结果仅供信息参考，
+    不构成投资建议。所有接口均为只读 GET 请求。
+servers:
+  - url: /
+    description: 当前 Worker 地址
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      summary: 服务健康检查
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/quote:
+    get:
+      operationId: getQuote
+      summary: 获取单只证券实时行情
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/quotes:
+    get:
+      operationId: getQuotes
+      summary: 批量获取实时行情
+      parameters:
+        - name: symbols
+          in: query
+          required: true
+          description: 1—50 个逗号分隔的股票代码
+          schema:
+            type: string
+          example: 600519,000001
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/indices:
+    get:
+      operationId: getIndices
+      summary: 获取主要 A 股指数
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/rankings:
+    get:
+      operationId: getRankings
+      summary: 获取 A 股排行榜
+      parameters:
+        - $ref: "#/components/parameters/RankingSort"
+        - $ref: "#/components/parameters/Order"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/sectors:
+    get:
+      operationId: getSectors
+      summary: 获取行业或概念板块排行
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+            enum: [industry, concept]
+            default: industry
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [change_pct, main_net_inflow, turnover]
+            default: change_pct
+        - $ref: "#/components/parameters/Order"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/kline:
+    get:
+      operationId: getKline
+      summary: 获取证券 K 线
+      parameters:
+        - $ref: "#/components/parameters/Symbol"
+        - $ref: "#/components/parameters/Period"
+        - $ref: "#/components/parameters/Adjustment"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 120
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/market/overview:
+    get:
+      operationId: getMarketOverview
+      summary: 获取市场综合概览
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/patterns:
+    get:
+      operationId: getTechnicalPatternCatalog
+      summary: 获取全部 101 种技术形态口令
+      description: 返回形态 ID、中文名、俗称/英文别名、分类、方向、最低 K 线数量和判定说明。
+      parameters:
+        - name: category
+          in: query
+          schema:
+            type: string
+            enum: [candlestick, trend, chart, indicator, volume]
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+  /api/v1/patterns/resolve:
+    get:
+      operationId: resolveTechnicalPatternCommand
+      summary: 解析自然语言技术形态口令
+      parameters:
+        - name: command
+          in: query
+          required: true
+          description: 例如“今天出现仙人指路形态的股票”或“分析600519的全部技术形态”
+          schema:
+            type: string
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/patterns/analyze:
+    get:
+      operationId: analyzeStockTechnicalPatterns
+      summary: 分析单只股票最新技术形态
+      description: 不传 pattern、patterns 和 command 时分析全部 101 种；结果只返回最新 K 线确认命中的形态。
+      parameters:
+        - name: symbol
+          in: query
+          description: 股票代码；若 command 中已包含 6 位代码可省略
+          schema:
+            type: string
+          example: 600519
+        - $ref: "#/components/parameters/Pattern"
+        - $ref: "#/components/parameters/Patterns"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/Period"
+        - $ref: "#/components/parameters/Adjustment"
+        - $ref: "#/components/parameters/History"
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "400":
+          $ref: "#/components/responses/Error"
+  /api/v1/patterns/screen:
+    get:
+      operationId: screenMarketTechnicalPatterns
+      summary: 分页筛选市场中的指定技术形态
+      description: 每次最多扫描 30 只并选择 12 种具体形态。响应提供 nextPage；遍历到 totalPages 才覆盖完整市场。
+      parameters:
+        - $ref: "#/components/parameters/Pattern"
+        - $ref: "#/components/parameters/Patterns"
+        - $ref: "#/components/parameters/Command"
+        - $ref: "#/components/parameters/Period"
+        - $ref: "#/components/parameters/Adjustment"
+        - $ref: "#/components/parameters/History"
+        - name: match
+          in: query
+          description: 任一形态命中或全部形态同时命中
+          schema:
+            type: string
+            enum: [any, all]
+            default: any
+        - name: page
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 30
+            default: 20
+        - name: sort
+          in: query
+          schema:
+            type: string
+            enum: [change_pct, amount, turnover, volume_ratio]
+            default: amount
+        - $ref: "#/components/parameters/Order"
+        - name: exclude_st
+          in: query
+          schema:
+            type: boolean
+            default: true
+        - name: min_amount
+          in: query
+          description: 最低成交额，单位为人民币元
+          schema:
+            type: number
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          $ref: "#/components/responses/Success"
+        "400":
+          $ref: "#/components/responses/Error"
+components:
+  parameters:
+    Symbol:
+      name: symbol
+      in: query
+      required: true
+      description: 支持 600519、SH600519、600519.SH 等格式
+      schema:
+        type: string
+      example: 600519
+    Period:
+      name: period
+      in: query
+      schema:
+        type: string
+        enum: [5m, 15m, 30m, 60m, day, week, month]
+        default: day
+    Adjustment:
+      name: adjust
+      in: query
+      schema:
+        type: string
+        enum: [none, forward, backward]
+        default: forward
+    RankingSort:
+      name: sort
+      in: query
+      schema:
+        type: string
+        enum: [change_pct, amount, turnover, volume_ratio]
+        default: change_pct
+    Order:
+      name: order
+      in: query
+      schema:
+        type: string
+        enum: [asc, desc]
+        default: desc
+    Pattern:
+      name: pattern
+      in: query
+      description: 可重复传入；支持中文名、俗称、英文 ID。市场筛选时至少提供一种。
+      schema:
+        type: string
+      example: 仙人指路
+    Patterns:
+      name: patterns
+      in: query
+      description: 逗号分隔的形态口令
+      schema:
+        type: string
+      example: 早晨之星,MACD金叉
+    Command:
+      name: command
+      in: query
+      description: 自然语言技术形态口令
+      schema:
+        type: string
+    History:
+      name: history
+      in: query
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 250
+  schemas:
+    ApiSuccess:
+      type: object
+      required: [ok, data, meta]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        data: {}
+        meta:
+          type: object
+          additionalProperties: true
+    ApiError:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          const: false
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+  responses:
+    Success:
+      description: 请求成功
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiSuccess"
+    Error:
+      description: 参数或服务错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ApiError"

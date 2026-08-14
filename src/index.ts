@@ -6,8 +6,10 @@ import {
   getQuotes,
   getRankings,
   getSectors,
+  getStockPage,
   type Fetcher,
   type KlinePeriod,
+  type MarketStock,
   type PriceAdjustment,
   type RankingSort,
   type SectorSort,
@@ -15,8 +17,18 @@ import {
   type SortOrder,
 } from "./eastmoney";
 import { ApiError } from "./errors";
+import {
+  analyzeTechnicalPatterns,
+  extractSymbolFromCommand,
+  inferPeriodFromCommand,
+  patternCatalogSummary,
+  resolvePatternTerms,
+  resolveTechnicalCommand,
+  type PatternAnalysis,
+  type PatternResolution,
+} from "./technical";
 
-const API_VERSION = "1.0.0";
+const API_VERSION = "1.1.0";
 const SOURCE_NAME = "东方财富公开网页行情接口";
 
 function positiveInteger(
@@ -60,6 +72,30 @@ function enumParameter<T extends string>(
   }
 
   return value as T;
+}
+
+function booleanParameter(
+  value: string | null,
+  fallback: boolean,
+  name: string,
+): boolean {
+  if (value === null || value === "") return fallback;
+  if (["1", "true", "yes", "on"].includes(value.toLowerCase())) return true;
+  if (["0", "false", "no", "off"].includes(value.toLowerCase())) return false;
+  throw new ApiError(400, "INVALID_PARAMETER", `${name} 只支持 true 或 false。`);
+}
+
+function nonNegativeNumber(
+  value: string | null,
+  fallback: number,
+  name: string,
+): number {
+  if (value === null || value === "") return fallback;
+  const number = Number(value);
+  if (!Number.isFinite(number) || number < 0) {
+    throw new ApiError(400, "INVALID_PARAMETER", `${name} 必须是非负数。`);
+  }
+  return number;
 }
 
 function corsHeaders(env: Env): Headers {
@@ -131,6 +167,67 @@ function requireQuery(url: URL, name: string): string {
   return value;
 }
 
+function patternInputs(url: URL): string[] {
+  const values = url.searchParams.getAll("pattern");
+  const patterns = url.searchParams.get("patterns");
+  const command = url.searchParams.get("command");
+  if (patterns) values.push(patterns);
+  if (command) values.push(command);
+  return values;
+}
+
+function resolvePatterns(url: URL, requireSelection = false): PatternResolution {
+  const inputs = patternInputs(url);
+  if (requireSelection && inputs.length === 0) {
+    throw new ApiError(400, "MISSING_PARAMETER", "缺少 pattern 或 command 参数。" );
+  }
+  const resolution = resolvePatternTerms(inputs);
+  if (resolution.patternIds.length === 0) {
+    throw new ApiError(
+      400,
+      "INVALID_PATTERN",
+      `未识别技术形态口令：${resolution.unresolvedTerms.join("、")}。访问 /api/v1/patterns 查看完整目录。`,
+    );
+  }
+  return resolution;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  concurrency: number,
+  task: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const results: Array<R | undefined> = Array.from({ length: items.length });
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const item = items[index];
+      if (item !== undefined) results[index] = await task(item, index);
+    }
+  };
+  await Promise.all(Array.from(
+    { length: Math.min(concurrency, items.length) },
+    async () => worker(),
+  ));
+  return results.filter((item): item is R => item !== undefined);
+}
+
+interface ScreenSuccess {
+  readonly ok: true;
+  readonly stock: MarketStock;
+  readonly analysis: PatternAnalysis;
+}
+
+interface ScreenFailure {
+  readonly ok: false;
+  readonly stock: MarketStock;
+  readonly error: string;
+}
+
+type ScreenOutcome = ScreenSuccess | ScreenFailure;
+
 function docs(origin: string) {
   return {
     service: "A 股行情 API",
@@ -145,6 +242,10 @@ function docs(origin: string) {
       { path: "/api/v1/sectors?type=industry&sort=change_pct&order=desc&limit=20", description: "行业或概念板块排行" },
       { path: "/api/v1/kline?symbol=600519&period=day&adjust=forward&limit=120", description: "K 线数据" },
       { path: "/api/v1/market/overview", description: "指数、涨跌家数、强势股和强势板块概览" },
+      { path: "/api/v1/patterns", description: "101 种技术形态口令与判定说明" },
+      { path: "/api/v1/patterns/resolve?command=今天出现仙人指路形态的股票", description: "解析自然语言技术形态口令" },
+      { path: "/api/v1/patterns/analyze?symbol=600519&pattern=全部", description: "分析单只股票的技术形态" },
+      { path: "/api/v1/patterns/screen?pattern=仙人指路&page=1&page_size=20", description: "分页筛选全市场技术形态" },
     ].map((item) => ({ ...item, url: `${origin}${item.path}` })),
     source: SOURCE_NAME,
     disclaimer: "公开网页行情接口可能调整；数据可能延迟，仅供信息参考，不构成投资建议。",
@@ -294,6 +395,201 @@ export async function handleRequest(
           env,
           requestId,
           10,
+        );
+        break;
+      }
+
+      case "/api/v1/patterns":
+      case "/api/v1/patterns/catalog": {
+        const category = url.searchParams.get("category");
+        const summary = patternCatalogSummary();
+        if (category) {
+          const selected = summary.categories.find((item) => item.id === category);
+          if (!selected) {
+            throw new ApiError(400, "INVALID_PARAMETER", "category 只支持：candlestick、trend、chart、indicator、volume。" );
+          }
+          response = success(
+            { methodologyVersion: summary.methodologyVersion, total: selected.count, category: selected },
+            env,
+            requestId,
+            3600,
+          );
+        } else {
+          response = success(summary, env, requestId, 3600);
+        }
+        break;
+      }
+
+      case "/api/v1/patterns/resolve": {
+        const command = requireQuery(url, "command");
+        const resolved = resolveTechnicalCommand(command);
+        const encodedPatterns = encodeURIComponent(resolved.patterns.patternIds.join(","));
+        const symbol = resolved.symbol ?? "600519";
+        response = success(
+          {
+            ...resolved,
+            suggestedRequest: resolved.intent === "screen"
+              ? `${url.origin}/api/v1/patterns/screen?patterns=${encodedPatterns}&period=${resolved.period}`
+              : resolved.intent === "catalog"
+                ? `${url.origin}/api/v1/patterns`
+                : `${url.origin}/api/v1/patterns/analyze?symbol=${encodeURIComponent(symbol)}&patterns=${encodedPatterns}&period=${resolved.period}`,
+          },
+          env,
+          requestId,
+          3600,
+        );
+        break;
+      }
+
+      case "/api/v1/patterns/analyze": {
+        const command = url.searchParams.get("command") ?? "";
+        const symbol = url.searchParams.get("symbol")?.trim()
+          || extractSymbolFromCommand(command)
+          || "";
+        if (!symbol) {
+          throw new ApiError(400, "MISSING_PARAMETER", "缺少 symbol；也可以在 command 中写入 6 位股票代码。" );
+        }
+        const inferredPeriod = inferPeriodFromCommand(command);
+        const period = enumParameter<KlinePeriod>(
+          url.searchParams.get("period"),
+          inferredPeriod,
+          ["5m", "15m", "30m", "60m", "day", "week", "month"],
+          "period",
+        );
+        const adjustment = enumParameter<PriceAdjustment>(
+          url.searchParams.get("adjust"),
+          "forward",
+          ["none", "forward", "backward"],
+          "adjust",
+        );
+        const history = positiveInteger(url.searchParams.get("history"), 250, 500, "history");
+        const resolution = resolvePatterns(url);
+        const kline = await getKline(symbol, period, adjustment, history, upstream);
+        response = success(
+          {
+            symbol: kline.symbol,
+            code: kline.code,
+            name: kline.name,
+            period,
+            adjustment,
+            requestedPatterns: resolution,
+            analysis: analyzeTechnicalPatterns(kline.items, resolution.patternIds),
+          },
+          env,
+          requestId,
+          period.endsWith("m") ? 10 : 300,
+        );
+        break;
+      }
+
+      case "/api/v1/patterns/screen": {
+        const resolution = resolvePatterns(url, true);
+        if (resolution.selectedAll || resolution.patternIds.length > 12) {
+          throw new ApiError(400, "TOO_MANY_PATTERNS", "市场筛选一次最多选择 12 种具体形态；请不要使用“全部”。" );
+        }
+        const command = url.searchParams.get("command") ?? "";
+        const period = enumParameter<KlinePeriod>(
+          url.searchParams.get("period"),
+          inferPeriodFromCommand(command),
+          ["5m", "15m", "30m", "60m", "day", "week", "month"],
+          "period",
+        );
+        const adjustment = enumParameter<PriceAdjustment>(
+          url.searchParams.get("adjust"),
+          "forward",
+          ["none", "forward", "backward"],
+          "adjust",
+        );
+        const page = positiveInteger(url.searchParams.get("page"), 1, 1000, "page");
+        const pageSize = positiveInteger(url.searchParams.get("page_size"), 20, 30, "page_size");
+        const history = positiveInteger(url.searchParams.get("history"), 180, 500, "history");
+        const sort = enumParameter<RankingSort>(
+          url.searchParams.get("sort"),
+          "amount",
+          ["change_pct", "amount", "turnover", "volume_ratio"],
+          "sort",
+        );
+        const order = enumParameter<SortOrder>(
+          url.searchParams.get("order"),
+          "desc",
+          ["asc", "desc"],
+          "order",
+        );
+        const matchMode = enumParameter<"any" | "all">(
+          url.searchParams.get("match"),
+          /同时|并且|全部满足/u.test(command) ? "all" : "any",
+          ["any", "all"],
+          "match",
+        );
+        const excludeSt = booleanParameter(url.searchParams.get("exclude_st"), true, "exclude_st");
+        const minAmount = nonNegativeNumber(url.searchParams.get("min_amount"), 0, "min_amount");
+        const stockPage = await getStockPage(page, pageSize, sort, order, upstream);
+        const candidates = stockPage.items.filter((stock) => stock.symbol
+          && stock.price !== null
+          && stock.price > 0
+          && (stock.amount ?? 0) >= minAmount
+          && (!excludeSt || !/\*?ST/iu.test(stock.name ?? "")));
+        const outcomes = await mapWithConcurrency<MarketStock, ScreenOutcome>(
+          candidates,
+          6,
+          async (stock) => {
+            try {
+              const kline = await getKline(stock.symbol ?? "", period, adjustment, history, upstream);
+              return {
+                ok: true,
+                stock,
+                analysis: analyzeTechnicalPatterns(kline.items, resolution.patternIds),
+              };
+            } catch (error) {
+              return {
+                ok: false,
+                stock,
+                error: error instanceof Error ? error.message : "未知错误",
+              };
+            }
+          },
+        );
+        const completed = outcomes.filter((item): item is ScreenSuccess => item.ok);
+        const failed = outcomes.filter((item): item is ScreenFailure => !item.ok);
+        const matched = completed
+          .filter((item) => matchMode === "all"
+            ? resolution.patternIds.every((id) => item.analysis.matches.some((match) => match.id === id))
+            : item.analysis.matches.length > 0)
+          .sort((left, right) => (right.analysis.matches[0]?.confidence ?? 0) - (left.analysis.matches[0]?.confidence ?? 0))
+          .map((item) => ({ stock: item.stock, analysis: item.analysis }));
+        response = success(
+          {
+            requestedPatterns: resolution,
+            period,
+            adjustment,
+            matchMode,
+            universe: {
+              sort,
+              order,
+              page,
+              pageSize,
+              totalSecurities: stockPage.total,
+              totalPages: stockPage.totalPages,
+              candidatesOnPage: candidates.length,
+              analyzedOnPage: completed.length,
+              failedOnPage: failed.length,
+              exhaustive: false,
+              note: "单次请求只扫描当前页；按 nextPage 继续，直到 page 等于 totalPages，才覆盖完整市场。",
+              nextPage: stockPage.totalPages !== null && page < stockPage.totalPages
+                ? `${url.origin}/api/v1/patterns/screen?patterns=${encodeURIComponent(resolution.patternIds.join(","))}&page=${page + 1}&page_size=${pageSize}&sort=${sort}&order=${order}&period=${period}&adjust=${adjustment}&history=${history}&match=${matchMode}&exclude_st=${String(excludeSt)}&min_amount=${minAmount}`
+                : null,
+            },
+            matchedCount: matched.length,
+            items: matched,
+            failures: failed.map((item) => ({
+              symbol: item.stock.symbol,
+              name: item.stock.name,
+              error: item.error,
+            })),
+          },
+          env,
+          requestId,
+          period.endsWith("m") ? 10 : 300,
         );
         break;
       }
