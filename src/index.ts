@@ -17,6 +17,7 @@ import {
   type SortOrder,
 } from "./eastmoney";
 import { ApiError } from "./errors";
+import { createAshareMcpHandler, type RestInvoker } from "./mcp";
 import {
   analyzeTechnicalPatterns,
   extractSymbolFromCommand,
@@ -28,7 +29,7 @@ import {
   type PatternResolution,
 } from "./technical";
 
-const API_VERSION = "1.1.0";
+const API_VERSION = "1.2.0";
 const SOURCE_NAME = "东方财富公开网页行情接口";
 
 function positiveInteger(
@@ -235,6 +236,7 @@ function docs(origin: string) {
     status: "ready",
     endpoints: [
       { path: "/health", description: "服务健康检查" },
+      { path: "/mcp", description: "ChatGPT 远程 MCP 插件入口（Streamable HTTP）" },
       { path: "/api/v1/quote?symbol=600519", description: "单只证券实时行情" },
       { path: "/api/v1/quotes?symbols=600519,000001", description: "批量实时行情（最多 50 只）" },
       { path: "/api/v1/indices", description: "主要 A 股指数" },
@@ -635,8 +637,37 @@ export async function handleRequest(
   }
 }
 
+async function parseInternalResponse(response: Response): Promise<unknown> {
+  const payload = await response.json() as {
+    readonly error?: { readonly message?: string };
+  };
+  if (!response.ok) {
+    throw new Error(payload.error?.message ?? `A 股 API 返回 HTTP ${response.status}。`);
+  }
+  return payload;
+}
+
+export async function handleWorkerRequest(
+  request: Request,
+  env: Env,
+  fetcher: Fetcher = fetch,
+): Promise<Response> {
+  if (new URL(request.url).pathname === "/mcp") {
+    const invokeRest: RestInvoker = async (path, query = {}) => {
+      const url = new URL(path, request.url);
+      for (const [name, value] of Object.entries(query)) {
+        if (value !== undefined) url.searchParams.set(name, String(value));
+      }
+      return parseInternalResponse(await handleRequest(new Request(url), env, fetcher));
+    };
+    return createAshareMcpHandler(invokeRest).fetch(request);
+  }
+
+  return handleRequest(request, env, fetcher);
+}
+
 export default {
   fetch(request, env): Promise<Response> {
-    return handleRequest(request, env);
+    return handleWorkerRequest(request, env);
   },
 } satisfies ExportedHandler<Env>;

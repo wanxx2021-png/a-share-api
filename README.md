@@ -1,6 +1,8 @@
 # A 股行情与技术形态 API
 
-部署在 Cloudflare Workers 上的轻量 A 股行情接口，返回统一 JSON，适合 ChatGPT、手机应用、网页看板和个人自动化使用。
+部署在 Cloudflare Workers 上的轻量 A 股行情与远程 MCP 服务，适合 ChatGPT、手机应用、网页看板和个人自动化使用。
+
+v1.2 新增公开、免登录、只读的远程 MCP 入口 `/mcp`，可在 ChatGPT 开发者模式中连接为“**A 股行情与技术形态助手**”。它把下列 REST 能力封装为 10 个带输入校验和安全注解的工具，同时保留所有原接口。
 
 v1.1 新增完整技术形态口令系统：101 种可执行判定规则、中文俗称/英文 ID 别名、自然语言口令解析、单股分析和分页市场筛选。每次命中都会返回置信度、信号日期和可复查的触发依据。
 
@@ -9,6 +11,7 @@ v1.1 新增完整技术形态口令系统：101 种可执行判定规则、中�
 | 接口 | 用途 |
 | --- | --- |
 | `GET /health` | 健康检查 |
+| `POST /mcp` | ChatGPT 远程 MCP 插件入口（Streamable HTTP） |
 | `GET /api/v1/quote?symbol=600519` | 单只股票实时行情 |
 | `GET /api/v1/quotes?symbols=600519,000001` | 批量行情，最多 50 只 |
 | `GET /api/v1/indices` | 上证、深证、创业板、科创 50、沪深 300 |
@@ -22,6 +25,38 @@ v1.1 新增完整技术形态口令系统：101 种可执行判定规则、中�
 | `GET /api/v1/patterns/screen?pattern=...` | 分页扫描市场中的指定形态 |
 
 访问 Worker 根地址 `/` 可获得完整、可点击的接口列表。OpenAPI 文件见 [`openapi.yaml`](./openapi.yaml)。
+
+## 在 ChatGPT 中连接
+
+当前生产 MCP 地址：
+
+```text
+https://a-share-api.foul-outfit.workers.dev/mcp
+```
+
+在 ChatGPT 网页版中：
+
+1. 打开 `设置 → 安全与登录 → 开发者模式`。
+2. 进入 `插件`，点击 `+` 添加远程 MCP。
+3. 粘贴上面的完整 `/mcp` 地址；认证方式选择“无认证”。
+4. 新建聊天并选择该插件，即可输入“复盘昨天 A 股”“分析 002576 通达动力走势”或“筛选仙人指路”。
+
+该 MCP 仅暴露读取行情与计算技术形态的工具，不包含下单、交易、改仓或写入操作。ChatGPT 开发者模式及连接步骤以 [OpenAI 官方说明](https://developers.openai.com/api/docs/guides/developer-mode) 为准。
+
+### MCP 工具
+
+| 工具 | 用途 |
+| --- | --- |
+| `get_stock_quotes` | 单只或批量实时行情 |
+| `get_market_indices` | 主要 A 股指数 |
+| `get_stock_rankings` | 涨跌幅、成交额、换手率、量比排行 |
+| `get_sector_rankings` | 行业和概念板块排行 |
+| `get_stock_kline` | 分钟、日、周、月 K 线 |
+| `get_market_overview` | 最近交易日市场复盘数据 |
+| `list_technical_patterns` | 101 种形态目录与别名 |
+| `resolve_technical_command` | 中文自然语言形态口令解析 |
+| `analyze_stock_patterns` | 单股技术形态分析 |
+| `screen_stock_patterns` | 分页技术形态选股 |
 
 ## 技术形态口令
 
