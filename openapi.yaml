@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: A 股行情与技术形态 API
-  version: 1.1.0
+  version: 1.2.0
   description: >-
     Cloudflare Workers 上的 A 股行情与技术形态接口。技术形态结果仅供信息参考，
     不构成投资建议。所有接口均为只读 GET 请求。

@@ -1,9 +1,9 @@
 {
   "name": "a-share-api",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
-  "description": "A-share market data API running on Cloudflare Workers",
+  "description": "A-share market data API and remote MCP server running on Cloudflare Workers",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy --minify",
@@ -14,7 +14,8 @@
     "check": "npm run types && npm run typecheck && npm test && wrangler deploy --dry-run"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "5.20260814.1",
+    "@cloudflare/workers-types": "^5.20260821.1",
+    "@modelcontextprotocol/client": "2.0.0",
     "@types/node": "24.10.1",
     "typescript": "6.0.3",
     "vitest": "4.1.10",
@@ -22,5 +23,11 @@
   },
   "engines": {
     "node": ">=24"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/server": "2.0.0",
+    "agents": "^0.20.1",
+    "zod": "^4.4.3"
   }
 }
